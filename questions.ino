@@ -27,6 +27,7 @@ const unsigned int TOTAL_QUESTIONS = 60;
 String currentQuestion = "";
 String currentReader = "";
 unsigned int questionsPresented = 0;
+bool currentIsDeep = false;
 
 // Session tracking for multi-device mode
 #define MAX_CLIENTS 20
@@ -36,51 +37,6 @@ struct ClientSession {
 };
 ClientSession clients[MAX_CLIENTS];
 int clientCount = 0;
-
-String registerClient(String clientId) {
-  unsigned long now = millis();
-
-  for (int i = 0; i < clientCount; i++) {
-    if (clients[i].id == clientId) {
-      clients[i].lastSeen = now;
-      return clientId;
-    }
-  }
-
-  if (clientCount < MAX_CLIENTS) {
-    clients[clientCount].id = clientId;
-    clients[clientCount].lastSeen = now;
-    clientCount++;
-    return clientId;
-  }
-
-  int oldest = 0;
-  for (int i = 1; i < MAX_CLIENTS; i++) {
-    if (clients[i].lastSeen < clients[oldest].lastSeen) {
-      oldest = i;
-    }
-  }
-  clients[oldest].id = clientId;
-  clients[oldest].lastSeen = now;
-  return clientId;
-}
-
-void rotateQuestion() {
-  if (clientCount == 0) {
-    currentQuestion = "";
-    currentReader = "";
-    return;
-  }
-  currentReader = clients[random(clientCount)].id;
-  currentQuestion = pickRandomQuestion();
-  questionsPresented++;
-}
-
-unsigned long getTimeRemaining() {
-  unsigned long elapsed = millis() - lastQuestionTime;
-  if (elapsed >= QUESTION_DURATION) return 0;
-  return QUESTION_DURATION - elapsed;
-}
 
 // ---------- PROGMEM question arrays ----------
 // Light questions (0-199)
@@ -360,6 +316,57 @@ const char* const deepQuestions[] PROGMEM = {
   "What's something you wish you were better at?"
 };
 
+String registerClient(String clientId) {
+  unsigned long now = millis();
+
+  for (int i = 0; i < clientCount; i++) {
+    if (clients[i].id == clientId) {
+      clients[i].lastSeen = now;
+      return clientId;
+    }
+  }
+
+  if (clientCount < MAX_CLIENTS) {
+    clients[clientCount].id = clientId;
+    clients[clientCount].lastSeen = now;
+    clientCount++;
+    return clientId;
+  }
+
+  int oldest = 0;
+  for (int i = 1; i < MAX_CLIENTS; i++) {
+    if (clients[i].lastSeen < clients[oldest].lastSeen) {
+      oldest = i;
+    }
+  }
+  clients[oldest].id = clientId;
+  clients[oldest].lastSeen = now;
+  return clientId;
+}
+
+void rotateQuestion() {
+  if (clientCount == 0) {
+    currentQuestion = "";
+    currentReader = "";
+    return;
+  }
+  currentReader = clients[random(clientCount)].id;
+  float deepProbability = min(questionsPresented / (TOTAL_QUESTIONS * 1.0f), 0.75f);
+  currentIsDeep = (random(100) / 100.0f) < deepProbability;
+  if (currentIsDeep) {
+    currentQuestion = getQuestion(deepQuestions, random(50));
+  } else {
+    currentQuestion = getQuestion(lightQuestions, random(50));
+  }
+  questionsPresented++;
+}
+
+unsigned long getTimeRemaining() {
+  unsigned long elapsed = millis() - lastQuestionTime;
+  if (elapsed >= QUESTION_DURATION) return 0;
+  return QUESTION_DURATION - elapsed;
+}
+
 // Helper to copy PROGMEM string to String
 String getQuestion(const char* const* array, int index) {
   char buffer[256];
@@ -367,16 +374,6 @@ String getQuestion(const char* const* array, int index) {
   return String(buffer);
 }
 
-// Pick random question: probability of deep increases with questionsPresented
-String pickRandomQuestion() {
-  float deepProbability = min(questionsPresented / (TOTAL_QUESTIONS * 1.0f), 0.75f);
-  bool pickDeep = (random(100) / 100.0f) < deepProbability;
-  if (pickDeep) {
-    return getQuestion(deepQuestions, random(50));
-  } else {
-    return getQuestion(lightQuestions, random(50));
-  }
-}
 
 // Send JSON array from PROGMEM
 void sendQuestionArray(const char* const* arr, int size) {
@@ -394,7 +391,7 @@ void sendQuestionArray(const char* const* arr, int size) {
 
 // Simplified HTML - questions only
 const char index_html[] PROGMEM = R"rawliteral(
-<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Question Deck</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#000;color:#fff;font-family:Arial,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;padding:20px}#counter{position:fixed;top:20px;right:20px;font-size:1.2rem;color:#a8dadc;z-index:100}#main{width:100%;max-width:600px;text-align:center}#question{font-size:3rem;font-weight:bold;min-height:200px;display:flex;align-items:center;justify-content:center;margin-bottom:40px;line-height:1.2;word-wrap:break-word}#question.listen{color:#87ceeb;font-size:2rem;font-weight:normal;font-style:italic}#timer{font-size:1.8rem;font-weight:bold;margin-top:30px;color:#ffd700}@media (max-width:600px){#question{font-size:2rem;min-height:150px}#question.listen{font-size:1.5rem}#timer{font-size:1.5rem}}</style></head><body><div id="counter">60/0</div><div id="main"><div id="question">Waiting...</div><div id="timer"></div></div><script>let sessionId=localStorage.getItem('sessionId')||'';let currentListenMsg='';let prevRemaining=15000;let wakeLock=null;const listenMessages=['Pay attention','Your moment is coming','Lean in close','Don\'t miss this','Focus up','What will they say?','Listen closely','This is good','Your turn soon','Get ready','Watch and learn','Here we go','Pay it forward','Your answer matters','Save your thoughts','Remember this','You\'re next','Stay tuned','This counts','Golden words'];async function requestWakeLock(){try{if('wakeLock' in navigator){wakeLock=await navigator.wakeLock.request('screen');document.addEventListener('visibilitychange',()=>{if(document.hidden&&wakeLock){wakeLock.release();wakeLock=null}else if(!document.hidden&&!wakeLock){requestWakeLock()}})}}catch(err){console.log('Wake lock failed',err)}}function registerSession(){fetch('/api/register?id='+sessionId).then(r=>r.json()).then(d=>{sessionId=d.id;localStorage.setItem('sessionId',sessionId);updateState()}).catch(e=>console.error(e))}function updateState(){fetch('/api/questions?session='+sessionId).then(r=>r.json()).then(d=>{const qEl=document.getElementById('question');const remaining=Math.ceil(d.remaining/1000);document.getElementById('timer').innerText=remaining+'s';document.getElementById('counter').innerText='60/'+d.count;if(d.active){qEl.innerText=d.question;qEl.classList.remove('listen')}else{if(remaining>prevRemaining||remaining===15){currentListenMsg=listenMessages[Math.floor(Math.random()*listenMessages.length)]}qEl.innerText=currentListenMsg;qEl.classList.add('listen')}prevRemaining=remaining}).catch(e=>console.error(e))}registerSession();requestWakeLock();setInterval(updateState,500);</script></body></html>
+<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Question Deck</title><style>*{margin:0;padding:0;box-sizing:border-box}body{background:#000;color:#fff;font-family:Arial,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;padding:20px}#counter{position:fixed;top:20px;right:20px;font-size:1.2rem;color:#a8dadc;z-index:100}#main{width:100%;max-width:600px;text-align:center}#question{font-size:3rem;font-weight:bold;min-height:200px;display:flex;align-items:center;justify-content:center;margin-bottom:40px;line-height:1.2;word-wrap:break-word}#question.listen{color:#87ceeb;font-size:2rem;font-weight:normal;font-style:italic}#timer{font-size:1.8rem;font-weight:bold;margin-top:30px;color:#ffd700}@media (max-width:600px){#question{font-size:2rem;min-height:150px}#question.listen{font-size:1.5rem}#timer{font-size:1.5rem}}</style></head><body><div id="counter">60/0</div><div id="main"><div id="question">Waiting...</div><div id="timer"></div></div><script>let sessionId=localStorage.getItem('sessionId')||'';const lightListenMsgs=['Pay attention','Lean in close','Focus up','Listen closely','Get ready','Stay tuned','This is good','Pay it forward'];const deepListenMsgs=['This is profound','Listen closely','Pay attention','Lean in','What wisdom','This matters','Remember this','Let it sink in'];function pickListenMsg(isDeep){const msgs=isDeep?deepListenMsgs:lightListenMsgs;return msgs[Math.floor(Math.random()*msgs.length)]}let currentListenMsg='';let currentQuestion='';let prevRemaining=15000;let wakeLock=null;const listenMessages=['Pay attention','Your moment is coming','Lean in close','Don\'t miss this','Focus up','What will they say?','Listen closely','This is good','Your turn soon','Get ready','Watch and learn','Here we go','Pay it forward','Your answer matters','Save your thoughts','Remember this','You\'re next','Stay tuned','This counts','Golden words'];async function requestWakeLock(){try{if('wakeLock' in navigator){wakeLock=await navigator.wakeLock.request('screen');document.addEventListener('visibilitychange',()=>{if(document.hidden&&wakeLock){wakeLock.release();wakeLock=null}else if(!document.hidden&&!wakeLock){requestWakeLock()}})}}catch(err){console.log('Wake lock failed',err)}}function registerSession(){fetch('/api/register?id='+sessionId).then(r=>r.json()).then(d=>{sessionId=d.id;localStorage.setItem('sessionId',sessionId);updateState()}).catch(e=>console.error(e))}function updateState(){fetch('/api/questions?session='+sessionId).then(r=>r.json()).then(d=>{const qEl=document.getElementById('question');const remaining=Math.ceil(d.remaining/1000);document.getElementById('timer').innerText=remaining+'s';document.getElementById('counter').innerText='60/'+d.count;if(d.active){qEl.innerText=d.question;qEl.classList.remove('listen');currentQuestion=d.question}else{if(d.question!==currentQuestion){currentListenMsg=pickListenMsg(d.isDeep);currentQuestion=d.question}qEl.innerText=currentListenMsg;qEl.classList.add('listen')}prevRemaining=remaining}).catch(e=>console.error(e))}registerSession();requestWakeLock();setInterval(updateState,500);</script></body></html>
 )rawliteral";
 
 void setup() {
@@ -431,6 +428,10 @@ void setup() {
       registerClient(clientId);
     }
 
+    if (currentQuestion.length() == 0 && clientCount > 0) {
+      rotateQuestion();
+    }
+
     bool isActive = (clientId == currentReader);
     String q = currentQuestion;
     q.replace("\\", "\\\\");
@@ -438,7 +439,7 @@ void setup() {
 
     unsigned long remaining = getTimeRemaining();
 
-    String response = "{\"active\":" + String(isActive) + ",\"question\":\"" + q + "\",\"remaining\":" + String(remaining) + ",\"count\":" + String(questionsPresented) + "}";
+    String response = "{\"active\":" + String(isActive) + ",\"question\":\"" + q + "\",\"remaining\":" + String(remaining) + ",\"count\":" + String(questionsPresented) + ",\"isDeep\":" + String(currentIsDeep) + "}";
     server.send(200, "application/json", response);
   });
   
